@@ -11,7 +11,10 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+var responseChannel = make(chan string, 100)
 
 // GET 访问网站，并提取网站标题
 // 参数: http
@@ -73,17 +76,20 @@ func GET(Httpurl string) list.List {
 // Test 测试域名是否存活
 // 参数: 域名字符串
 // 返回值: 一个map对象
-func Test(domain string) map[string]string {
+func Test(domain string, limiter chan bool, wg *sync.WaitGroup) map[string]string {
 
 	resultData := make(map[string]string)
 
 	record, _ := net.LookupIP(domain)
+	defer wg.Done()
 
 	if len(record) == 0 {
 		//fmt.Println("无效域名")
+		responseChannel <- ""
+		<-limiter
 		return nil
 	}
-	fmt.Println(domain, record[0])
+	//fmt.Println(domain, record[0])
 
 	//cur_httpurl := "http://" + domain
 	//cur_httpsurl := "https://" + domain
@@ -101,6 +107,11 @@ func Test(domain string) map[string]string {
 	//	fmt.Println(i.Value)
 	//}
 	resultData[domain] = record[0].String()
+
+	responseChannel <- fmt.Sprintf("%s,%s", domain, record[0].String())
+	// 释放一个坑位
+	<-limiter
+
 	return resultData
 }
 
@@ -171,17 +182,32 @@ func ReadUrlFile(urlfile string) *list.List {
 	return l
 }
 
+func ResponseController() {
+	for rc := range responseChannel {
+		fmt.Printf("%s", rc)
+	}
+}
+
 func main() {
-	httpinfo := list.New()
+	//httpinfo := list.New()
+
+	go ResponseController()
+
+	wg := &sync.WaitGroup{}
+	// 控制并发数为10
+	limiter := make(chan bool, 100)
 
 	urllist := ReadUrlFile("target.txt")
 	for i := urllist.Front(); i != nil; i = i.Next() {
-		fmt.Println(i.Value.(string))
-		domain := i.Value.(string)
-		res := Test(domain)
-		if res != nil {
-			httpinfo.PushBack(res)
-		}
+		//fmt.Println(i.Value.(string))
+		//domain := i.Value.(string)
+		wg.Add(1)
+		limiter <- true
+		go Test(i.Value.(string), limiter, wg)
+		//res := Test(domain)
+		//if res != nil {
+		//	httpinfo.PushBack(res)
+		//}
 	}
 	//
 	//domain := "baidu.cn"
@@ -190,5 +216,8 @@ func main() {
 
 	//
 	//
-	SaveFile(httpinfo, "muralist.csv")
+	//SaveFile(httpinfo, "muralist.csv")
+	// 等待所以协程执行完毕
+	wg.Wait() // 当计数器为0时, 不再阻塞
+	fmt.Println("所有协程已执行完毕")
 }
